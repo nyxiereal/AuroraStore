@@ -5,12 +5,6 @@
 
 package com.aurora.store.compose.composable
 
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -25,12 +19,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.dimensionResource
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.tooling.preview.PreviewWrapper
@@ -39,42 +31,20 @@ import com.aurora.store.R
 import com.aurora.store.compose.preview.ThemePreviewProvider
 
 @Composable
-fun shimmerBrush(): Brush {
-    val base = MaterialTheme.colorScheme.onSurface
-    val colors = listOf(
-        base.copy(alpha = 0.08f),
-        base.copy(alpha = 0.20f),
-        base.copy(alpha = 0.08f)
-    )
-    val transition = rememberInfiniteTransition(label = "shimmer")
-    val offset by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1000, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "shimmer_offset"
-    )
-    val x = offset * 1200f
-    return Brush.linearGradient(
-        colors = colors,
-        start = Offset(x - 400f, 0f),
-        end = Offset(x, 400f)
-    )
-}
-
-@Composable
 private fun ShimmerBlock(modifier: Modifier, radiusRes: Int = R.dimen.radius_small) {
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(dimensionResource(radiusRes)))
-            .background(shimmerBrush())
+            // Static tones avoid running an infinite animation for every skeleton block.
+            .background(MaterialTheme.colorScheme.surfaceContainerHighest)
     )
 }
 
 @Composable
 private fun ShimmerTextStack(modifier: Modifier = Modifier, widthFractions: List<Float>) {
+    val lineHeight = with(LocalDensity.current) {
+        MaterialTheme.typography.bodySmall.lineHeight.toDp()
+    }
     Column(
         modifier = modifier,
         verticalArrangement = Arrangement.spacedBy(dimensionResource(R.dimen.spacing_xsmall))
@@ -83,7 +53,7 @@ private fun ShimmerTextStack(modifier: Modifier = Modifier, widthFractions: List
             ShimmerBlock(
                 modifier = Modifier
                     .fillMaxWidth(fraction)
-                    .height(14.dp)
+                    .height(lineHeight)
             )
         }
     }
@@ -95,8 +65,10 @@ private fun ShimmerListRow(showTrailing: Boolean) {
         modifier = Modifier
             .fillMaxWidth()
             .padding(
-                horizontal = dimensionResource(R.dimen.spacing_small),
-                vertical = dimensionResource(R.dimen.spacing_xsmall)
+                horizontal = dimensionResource(R.dimen.spacing_medium),
+                vertical = dimensionResource(
+                    if (showTrailing) R.dimen.spacing_small else R.dimen.spacing_xsmall
+                )
             ),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(dimensionResource(R.dimen.spacing_small))
@@ -147,13 +119,20 @@ internal fun ShimmerCategoryRow() {
         ShimmerBlock(
             modifier = Modifier
                 .weight(1f)
-                .height(24.dp)
+                .height(
+                    with(LocalDensity.current) {
+                        MaterialTheme.typography.bodyLarge.lineHeight.toDp()
+                    }
+                )
         )
     }
 }
 
 @Composable
 internal fun ShimmerCarouselSection() {
+    val labelHeight = with(LocalDensity.current) {
+        MaterialTheme.typography.labelMedium.lineHeight.toDp()
+    }
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -163,7 +142,11 @@ internal fun ShimmerCarouselSection() {
         ShimmerBlock(
             modifier = Modifier
                 .fillMaxWidth(0.42f)
-                .height(16.dp)
+                .height(
+                    with(LocalDensity.current) {
+                        MaterialTheme.typography.titleMedium.lineHeight.toDp()
+                    }
+                )
         )
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -182,12 +165,12 @@ internal fun ShimmerCarouselSection() {
                     ShimmerBlock(
                         modifier = Modifier
                             .width(dimensionResource(R.dimen.icon_size_cluster) * 0.75f)
-                            .height(11.dp)
+                            .height(labelHeight)
                     )
                     ShimmerBlock(
                         modifier = Modifier
                             .width(dimensionResource(R.dimen.icon_size_cluster) * 0.5f)
-                            .height(11.dp)
+                            .height(labelHeight)
                     )
                 }
             }

@@ -18,6 +18,7 @@ import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
@@ -91,6 +92,7 @@ fun MainScreen(
     val downloads by updatesViewModel.downloadsList.collectAsStateWithLifecycle()
 
     val coroutineScope = rememberCoroutineScope()
+    val tabAnimationSpec = MaterialTheme.motionScheme.defaultSpatialSpec<Float>()
     val pagerState = rememberPagerState(
         initialPage = initialTab.coerceIn(
             0,
@@ -219,7 +221,12 @@ fun MainScreen(
                     NavigationBarItem(
                         selected = pagerState.currentPage == index,
                         onClick = {
-                            coroutineScope.launch { pagerState.animateScrollToPage(index) }
+                            coroutineScope.launch {
+                                pagerState.animateScrollToPage(
+                                    page = index,
+                                    animationSpec = tabAnimationSpec
+                                )
+                            }
                         },
                         icon = {
                             if (tab == MainTab.UPDATES && updateCount > 0) {
