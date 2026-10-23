@@ -459,7 +459,7 @@
     <string name="manual_download_version_error">Код версії може містити лише цифри</string>
     <string name="preparing_to_install">Підготовка до встановлення</string>
     <plurals name="permissions_required">
-        <item quantity="one">Потрібен дозвіл</item>
+        <item quantity="one">Потрібен %1$d дозвіл</item>
         <item quantity="few">Потрібні дозволи</item>
         <item quantity="many">Потрібні дозволи</item>
         <item quantity="other">Потрібні дозволи</item>

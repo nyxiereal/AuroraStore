@@ -8,6 +8,7 @@ package com.aurora.store.compose.ui.commons
 import android.content.Context
 import com.aurora.store.R
 import com.aurora.store.util.Preferences
+import java.util.Collections
 import java.util.Locale
 
 /**
@@ -134,6 +135,6 @@ fun <T : InstalledAppMeta> List<T>.applySort(state: SortFilterState): List<T> {
         SortBy.SIZE -> compareBy { it.sizeBytes }
     }
     return sortedWith(
-        if (state.sortOrder == SortOrder.ASC) comparator else comparator.reversed()
+        if (state.sortOrder == SortOrder.ASC) comparator else Collections.reverseOrder(comparator)
     )
 }

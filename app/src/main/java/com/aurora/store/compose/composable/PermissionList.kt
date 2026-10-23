@@ -31,6 +31,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.tooling.preview.PreviewWrapper
 import androidx.compose.ui.tooling.preview.datasource.LoremIpsum
 import androidx.core.net.toUri
+import com.aurora.extensions.isRAndAbove
 import com.aurora.extensions.isTAndAbove
 import com.aurora.extensions.toast
 import com.aurora.store.BuildConfig
@@ -61,8 +62,7 @@ fun PermissionList(
     var permissionRequested by rememberSaveable { mutableStateOf<PermissionType?>(null) }
 
     @SuppressLint("InlinedApi", "BatteryLife")
-    val intentMap = mapOf(
-        PermissionType.STORAGE_MANAGER to PackageUtil.getStorageManagerIntent(context),
+    val intentMap = mutableMapOf(
         PermissionType.INSTALL_UNKNOWN_APPS to PackageUtil.getInstallUnknownAppsIntent(),
         PermissionType.DOZE_WHITELIST to Intent(
             Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
@@ -72,7 +72,11 @@ fun PermissionList(
             ACTION_APP_OPEN_BY_DEFAULT_SETTINGS,
             "package:${BuildConfig.APPLICATION_ID}".toUri()
         )
-    )
+    ).apply {
+        if (isRAndAbove) {
+            put(PermissionType.STORAGE_MANAGER, PackageUtil.getStorageManagerIntent(context))
+        }
+    }
 
     fun onResult() {
         permissionRequested?.let {
@@ -90,7 +94,7 @@ fun PermissionList(
         onResult = {
             when (permissionRequested) {
                 PermissionType.STORAGE_MANAGER -> {
-                    intentLauncher.launch(intentMap[PermissionType.STORAGE_MANAGER]!!)
+                    intentMap[PermissionType.STORAGE_MANAGER]?.let { intentLauncher.launch(it) }
                 }
 
                 else -> onResult()

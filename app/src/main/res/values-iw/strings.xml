@@ -460,6 +460,7 @@
     <plurals name="permissions_required">
         <item quantity="one">נדרשת הרשאת גישה</item>
         <item quantity="two">נדרשות הרשאות גישה</item>
+        <item quantity="many">נדרשות הרשאות גישה</item>
         <item quantity="other">נדרשות הרשאות גישה</item>
     </plurals>
     <string name="select_app_for_details">יש לבחור יישום כדי להציג פרטים נוספים</string>

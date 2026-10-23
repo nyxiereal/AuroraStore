@@ -460,7 +460,7 @@
     <string name="details_more_content_rating">Рэйтынг змесціва</string>
     <string name="preparing_to_install">Падрыхтоўка да ўсталявання</string>
     <plurals name="permissions_required">
-        <item quantity="one">Патрэбны дазвол</item>
+        <item quantity="one">Патрэбны %1$d дазвол</item>
         <item quantity="few">Патрэбныя дазволы</item>
         <item quantity="many">Патрэбныя дазволы</item>
         <item quantity="other">Патрэбныя дазволы</item>

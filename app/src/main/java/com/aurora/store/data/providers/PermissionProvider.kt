@@ -237,8 +237,7 @@ class PermissionProvider(private val fragment: Fragment) :
     }
 
     @SuppressLint("InlinedApi")
-    private fun knownPermissions(): Map<PermissionType, Intent> = mapOf(
-        PermissionType.STORAGE_MANAGER to PackageUtil.getStorageManagerIntent(context),
+    private fun knownPermissions(): Map<PermissionType, Intent> = mutableMapOf(
         PermissionType.INSTALL_UNKNOWN_APPS to PackageUtil.getInstallUnknownAppsIntent(),
         PermissionType.DOZE_WHITELIST to Intent(
             Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
@@ -248,5 +247,9 @@ class PermissionProvider(private val fragment: Fragment) :
             ACTION_APP_OPEN_BY_DEFAULT_SETTINGS,
             "package:${BuildConfig.APPLICATION_ID}".toUri()
         )
-    )
+    ).apply {
+        if (isRAndAbove) {
+            put(PermissionType.STORAGE_MANAGER, PackageUtil.getStorageManagerIntent(context))
+        }
+    }
 }

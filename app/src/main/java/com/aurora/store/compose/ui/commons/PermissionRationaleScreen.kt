@@ -60,7 +60,11 @@ private fun ScreenContent(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = pluralStringResource(R.plurals.permissions_required, permissions.size),
+                title = pluralStringResource(
+                    R.plurals.permissions_required,
+                    permissions.size,
+                    permissions.size
+                ),
                 navigationIcon = windowAdaptiveInfo.adaptiveNavigationIcon
             )
         }

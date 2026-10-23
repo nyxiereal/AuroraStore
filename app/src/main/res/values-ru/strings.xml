@@ -459,7 +459,7 @@
     <string name="manual_download_version_error">Код версии может содержать только цифры</string>
     <string name="preparing_to_install">Подготовка к установке</string>
     <plurals name="permissions_required">
-        <item quantity="one">Требуется разрешение</item>
+        <item quantity="one">Требуется %1$d разрешение</item>
         <item quantity="few">Требуются разрешения</item>
         <item quantity="many">Требуются разрешения</item>
         <item quantity="other">Требуются разрешения</item>
