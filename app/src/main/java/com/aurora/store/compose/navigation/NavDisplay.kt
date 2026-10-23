@@ -174,15 +174,16 @@ fun NavDisplay(startDestination: NavKey) {
     }
 
     fun navigate(destination: Destination) {
-        if (destination !is Destination.Authenticated && destination !is Destination.Main) {
-            recoveryAttempted = false
-        }
+        recoveryAttempted = recoveryAttemptedAfterNavigation(recoveryAttempted, destination)
         when (destination) {
             is Destination.Authenticated -> finishAuthentication(destination.fallback)
             is Destination.Splash -> {
-                // Clear the backstack when navigating to Splash to prevent going back to the previous screen when the user is sent back to the splash screen (e.g. after logout).
+                val restored = splashBackStack(
+                    backstack.filterIsInstance<Screen>(),
+                    destination.packageName
+                )
                 backstack.clear()
-                backstack.add(Screen.Splash(destination.packageName))
+                backstack.addAll(restored)
             }
 
             is Destination.Main -> {

@@ -27,3 +27,22 @@ internal fun recoverySplash(
 
 internal fun authenticatedBackStack(splash: Screen.Splash?, fallback: Screen): List<Screen> =
     splash?.resumeBackStack?.takeIf { it.isNotEmpty() } ?: listOf(fallback)
+
+internal fun recoveryAttemptedAfterNavigation(
+    alreadyAttempted: Boolean,
+    destination: Destination
+): Boolean = when (destination) {
+    is Destination.Authenticated -> alreadyAttempted && !destination.afterManualRetry
+    is Destination.Main -> alreadyAttempted
+    else -> false
+}
+
+internal fun splashBackStack(backStack: List<Screen>, packageName: String?): List<Screen> {
+    val login = backStack.lastOrNull() as? Screen.GoogleLogin
+    val previous = backStack.getOrNull(backStack.lastIndex - 1) as? Screen.Splash
+    // A failed login returns to its existing gate, including any pending recovery destination.
+    if (packageName == null && login?.addAccount == false && previous != null) {
+        return backStack.dropLast(1)
+    }
+    return listOf(Screen.Splash(packageName))
+}

@@ -42,6 +42,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -94,6 +95,7 @@ fun SplashScreen(
     var anonymousLoading by remember { mutableStateOf(false) }
     var googleLoading by remember { mutableStateOf(false) }
     var wasOffline by remember { mutableStateOf(!isOnline) }
+    var manuallyRetried by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(viewModel) {
         viewModel.startSession(recoverSession, recoveryBlocked)
@@ -135,7 +137,9 @@ fun SplashScreen(
                         Preferences.getInteger(context, Preferences.PREFERENCE_DEFAULT_SELECTED_TAB)
                     )
                 }
-                onNavigateTo(Destination.Authenticated(destination))
+                onNavigateTo(
+                    Destination.Authenticated(destination, afterManualRetry = manuallyRetried)
+                )
             }
             is AuthState.PendingAccountManager -> requestAuthTokenForGoogle(
                 viewModel = viewModel,
@@ -272,7 +276,10 @@ fun SplashScreen(
                         if (authState is AuthState.Failed) {
                             OutlinedButton(
                                 enabled = isOnline,
-                                onClick = { viewModel.retry() }
+                                onClick = {
+                                    manuallyRetried = true
+                                    viewModel.retry()
+                                }
                             ) {
                                 Text(stringResource(R.string.action_retry))
                             }

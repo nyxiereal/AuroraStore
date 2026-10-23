@@ -17,7 +17,10 @@ import com.aurora.store.data.room.update.Update
 sealed class Destination {
     data class Splash(val packageName: String? = null) : Destination()
     data class Main(val initialTab: Int) : Destination()
-    data class Authenticated(val fallback: Screen) : Destination()
+    data class Authenticated(
+        val fallback: Screen,
+        val afterManualRetry: Boolean = false
+    ) : Destination()
 
     data class AppDetails(val packageName: String) : Destination()
     data class DevProfile(val devId: String) : Destination()

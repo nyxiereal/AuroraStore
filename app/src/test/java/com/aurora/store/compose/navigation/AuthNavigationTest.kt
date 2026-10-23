@@ -46,6 +46,73 @@ class AuthNavigationTest {
     }
 
     @Test
+    fun `successful manual retry rearms automatic recovery for the restored destination`() {
+        val details = Screen.AppDetails("org.example.app")
+        val splash = recoverySplash(listOf(Screen.Search, details), null, true)!!
+        val restored = authenticatedBackStack(splash, details)
+        val attempted = recoveryAttemptedAfterNavigation(
+            true,
+            Destination.Authenticated(details, afterManualRetry = true)
+        )
+
+        assertFalse(attempted)
+        assertEquals(listOf(Screen.Search, details), restored)
+        assertFalse(recoverySplash(restored, null, attempted)!!.recoveryBlocked)
+    }
+
+    @Test
+    fun `automatic authentication completion keeps the recovery limit`() {
+        val details = Screen.AppDetails("org.example.app")
+        val attempted = recoveryAttemptedAfterNavigation(true, Destination.Authenticated(details))
+
+        assertTrue(attempted)
+        assertTrue(recoverySplash(listOf(details), null, attempted)!!.recoveryBlocked)
+        assertTrue(recoveryAttemptedAfterNavigation(true, Destination.Main(0)))
+    }
+
+    @Test
+    fun `failed Google login keeps recovery destination through another successful login`() {
+        val screens = listOf(Screen.Main(), Screen.Search, Screen.AppDetails("org.example.app"))
+        val splash = recoverySplash(screens, null, true)!!
+        val returned = splashBackStack(listOf(splash, Screen.GoogleLogin()), null)
+
+        assertEquals(listOf(splash), returned)
+        assertEquals(returned, splashBackStack(returned + Screen.GoogleLogin(), null))
+        assertEquals(
+            screens,
+            authenticatedBackStack(returned.single() as Screen.Splash, Screen.Main())
+        )
+    }
+
+    @Test
+    fun `logout still clears the recovery destination`() {
+        val splash = recoverySplash(listOf(Screen.Search), "org.example.app", true)!!
+
+        assertEquals(
+            listOf(Screen.Splash()),
+            splashBackStack(listOf(splash, Screen.Accounts), null)
+        )
+        assertEquals(listOf(Screen.Splash()), splashBackStack(emptyList(), null))
+    }
+
+    @Test
+    fun `an explicit new Splash destination replaces pending recovery`() {
+        val splash = recoverySplash(listOf(Screen.Search), "org.example.app", true)!!
+
+        assertEquals(
+            listOf(Screen.Splash("other.app")),
+            splashBackStack(listOf(splash, Screen.GoogleLogin()), "other.app")
+        )
+    }
+
+    @Test
+    fun `failed initial login also retains its deep link`() {
+        val splash = Screen.Splash("org.example.app")
+
+        assertEquals(listOf(splash), splashBackStack(listOf(splash, Screen.GoogleLogin()), null))
+    }
+
+    @Test
     fun `existing details destination is not duplicated`() {
         val screens = listOf(Screen.Main(), Screen.AppDetails("org.example.app"))
 
