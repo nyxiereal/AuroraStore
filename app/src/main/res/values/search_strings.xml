@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ~ SPDX-FileCopyrightText: 2026 Aurora OSS
+  ~ SPDX-License-Identifier: GPL-3.0-or-later
+  -->
+<resources>
+    <string name="search_recent">Recent searches</string>
+    <string name="search_clear_history">Clear history</string>
+    <string name="search_remove_history">Remove %1$s from search history</string>
+    <string name="search_edit_suggestion">Edit search: %1$s</string>
+    <string name="search_filters_title">Store search filters</string>
+    <string name="search_filters_description">Applies to store search results only. Does not block app updates.</string>
+    <string name="search_filters_anonymous">The Google Play services filter requires a personal account.</string>
+    <string name="search_filter_value">%1$s: %2$s</string>
+</resources>

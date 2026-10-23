@@ -26,7 +26,10 @@ import com.aurora.store.compose.ui.commons.save
 import com.aurora.store.data.event.BusEvent
 import com.aurora.store.data.helper.UpdateHelper
 import com.aurora.store.data.model.BlacklistAppItem
+import com.aurora.store.data.model.SearchFilter
+import com.aurora.store.data.providers.AuthProvider
 import com.aurora.store.data.providers.BlacklistProvider
+import com.aurora.store.data.providers.SearchPreferences
 import com.aurora.store.util.CertUtil
 import com.aurora.store.util.PackageUtil
 import com.aurora.store.util.Preferences
@@ -48,6 +51,8 @@ class BlacklistViewModel @Inject constructor(
     private val json: Json,
     private val updateHelper: UpdateHelper,
     private val blacklistProvider: BlacklistProvider,
+    private val authProvider: AuthProvider,
+    private val searchPreferences: SearchPreferences,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
 
@@ -63,6 +68,10 @@ class BlacklistViewModel @Inject constructor(
 
     private val _state = MutableStateFlow(loadSortFilterState(context, PREF_KEYS))
     val state = _state.asStateFlow()
+
+    val searchFilter = searchPreferences.observeFilters(viewModelScope)
+    val isAnonymous: Boolean
+        get() = authProvider.isAnonymous
 
     private val _installers = MutableStateFlow<Map<String, String>>(emptyMap())
     val installers = _installers.asStateFlow()
@@ -128,6 +137,10 @@ class BlacklistViewModel @Inject constructor(
         if (newState == _state.value) return
         _state.value = newState
         newState.save(context, PREF_KEYS)
+    }
+
+    fun updateSearchFilter(filter: SearchFilter) {
+        searchPreferences.saveFilters(filter)
     }
 
     private fun resolveInstallerLabel(packageName: String): String = try {

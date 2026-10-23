@@ -5,6 +5,7 @@
 
 package com.aurora.store.compose.composable
 
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -14,8 +15,10 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.dimensionResource
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.tooling.preview.PreviewWrapper
+import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
@@ -31,7 +34,7 @@ fun SearchSuggestionListItem(
     onAction: (query: String) -> Unit = {}
 ) {
     AuroraListItem(
-        modifier = modifier,
+        modifier = modifier.heightIn(min = 48.dp),
         headline = searchSuggestEntry.title,
         onClick = { onClick(searchSuggestEntry.title) },
         leading = {
@@ -56,7 +59,10 @@ fun SearchSuggestionListItem(
             IconButton(onClick = { onAction(searchSuggestEntry.title) }) {
                 Icon(
                     painter = painterResource(R.drawable.ic_search_append),
-                    contentDescription = null
+                    contentDescription = stringResource(
+                        R.string.search_edit_suggestion,
+                        searchSuggestEntry.title
+                    )
                 )
             }
         }

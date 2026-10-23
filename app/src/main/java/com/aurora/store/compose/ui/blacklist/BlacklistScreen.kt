@@ -25,6 +25,7 @@ import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import androidx.compose.material3.AppBarWithSearch
 import androidx.compose.material3.ExpandedFullScreenSearchBar
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -68,6 +69,7 @@ import com.aurora.store.compose.ui.blacklist.menu.MenuItem
 import com.aurora.store.compose.ui.commons.SortFilterSheet
 import com.aurora.store.compose.ui.commons.SortFilterState
 import com.aurora.store.data.model.BlacklistAppItem
+import com.aurora.store.data.model.SearchFilter
 import com.aurora.store.viewmodel.blacklist.BlacklistViewModel
 import java.util.Calendar
 import kotlinx.coroutines.flow.collectLatest
@@ -79,11 +81,15 @@ fun BlacklistScreen(viewModel: BlacklistViewModel = hiltViewModel()) {
     val packages by viewModel.filteredPackages.collectAsStateWithLifecycle()
     val state by viewModel.state.collectAsStateWithLifecycle()
     val installers by viewModel.installers.collectAsStateWithLifecycle()
+    val searchFilter by viewModel.searchFilter.collectAsStateWithLifecycle()
 
     ScreenContent(
         packages = packages,
         sortFilterState = state,
         installers = installers,
+        searchFilter = searchFilter,
+        isAnonymous = viewModel.isAnonymous,
+        onSearchFilterChange = viewModel::updateSearchFilter,
         isPackageBlacklisted = { pkgName -> pkgName in viewModel.blacklist },
         onBlacklistImport = { uri ->
             viewModel.importBlacklist(uri)
@@ -107,6 +113,9 @@ private fun ScreenContent(
     packages: List<BlacklistAppItem>? = null,
     sortFilterState: SortFilterState = SortFilterState(),
     installers: Map<String, String> = emptyMap(),
+    searchFilter: SearchFilter = SearchFilter(),
+    isAnonymous: Boolean = true,
+    onSearchFilterChange: (SearchFilter) -> Unit = {},
     isPackageBlacklisted: (packageName: String) -> Boolean = { false },
     onBlacklistImport: (uri: Uri) -> Unit = {},
     onBlacklistExport: (uri: Uri) -> Unit = {},
@@ -275,76 +284,74 @@ private fun ScreenContent(
                 .fillMaxSize()
                 .padding(paddingValues)
         ) {
-            if (packages == null) {
-                ContainedLoadingIndicator()
-            } else {
-                val (selectedPackages, otherPackages) = packages.partition { pkg ->
-                    isPackageBlacklisted(pkg.packageName) || pkg.isFiltered
-                }
-
-                @Composable
-                fun BlacklistRow(pkg: BlacklistAppItem) {
-                    val isBlacklisted = isPackageBlacklisted(pkg.packageName)
-                    BlackListItem(
-                        icon = pkg.icon,
-                        displayName = pkg.displayName,
-                        packageName = pkg.packageName,
-                        versionName = pkg.versionName,
-                        versionCode = pkg.versionCode,
-                        isChecked = isBlacklisted || pkg.isFiltered,
-                        isEnabled = !pkg.isFiltered,
-                        onClick = {
-                            if (isBlacklisted) {
-                                onWhitelist(pkg.packageName)
-                            } else {
-                                onBlacklist(pkg.packageName)
-                            }
+            @Composable
+            fun BlacklistRow(pkg: BlacklistAppItem) {
+                val isBlacklisted = isPackageBlacklisted(pkg.packageName)
+                BlackListItem(
+                    icon = pkg.icon,
+                    displayName = pkg.displayName,
+                    packageName = pkg.packageName,
+                    versionName = pkg.versionName,
+                    versionCode = pkg.versionCode,
+                    isChecked = isBlacklisted || pkg.isFiltered,
+                    isEnabled = !pkg.isFiltered,
+                    onClick = {
+                        if (isBlacklisted) {
+                            onWhitelist(pkg.packageName)
+                        } else {
+                            onBlacklist(pkg.packageName)
                         }
-                    )
-                }
+                    }
+                )
+            }
 
-                LazyColumn(
-                    modifier = Modifier.fillMaxWidth(),
-                    state = listState,
-                    verticalArrangement = Arrangement.spacedBy(
-                        dimensionResource(R.dimen.spacing_xsmall)
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                state = listState,
+                verticalArrangement = Arrangement.spacedBy(
+                    dimensionResource(R.dimen.spacing_xsmall)
+                )
+            ) {
+                item(key = "search_filters") {
+                    SearchFilterSection(
+                        filter = searchFilter,
+                        isAnonymous = isAnonymous,
+                        onFilter = onSearchFilterChange
                     )
-                ) {
+                    HorizontalDivider()
+                }
+                if (packages == null) {
+                    item(key = "loading") { ContainedLoadingIndicator() }
+                } else {
+                    val (selectedPackages, otherPackages) = packages.partition { pkg ->
+                        isPackageBlacklisted(pkg.packageName) || pkg.isFiltered
+                    }
                     if (selectedPackages.isNotEmpty()) {
                         stickyHeader(key = "header_selected") {
                             Surface(modifier = Modifier.fillMaxWidth()) {
                                 TextDividerComposable(
-                                    title = stringResource(
-                                        R.string.header_blacklist_selected
-                                    )
+                                    title = stringResource(R.string.header_blacklist_selected)
                                 )
                             }
                         }
-                        items(items = selectedPackages, key = { p ->
-                            p.packageName.hashCode()
-                        }) { pkg -> BlacklistRow(pkg) }
+                        items(selectedPackages, key = { it.packageName }) { BlacklistRow(it) }
                     }
-
                     if (otherPackages.isNotEmpty()) {
                         stickyHeader(key = "header_others") {
                             Surface(modifier = Modifier.fillMaxWidth()) {
                                 TextDividerComposable(
-                                    title = stringResource(
-                                        R.string.header_blacklist_others
-                                    )
+                                    title = stringResource(R.string.header_blacklist_others)
                                 )
                             }
                         }
-                        items(items = otherPackages, key = { p ->
-                            p.packageName.hashCode()
-                        }) { pkg -> BlacklistRow(pkg) }
+                        items(otherPackages, key = { it.packageName }) { BlacklistRow(it) }
                     }
                 }
-                ScrollHint(
-                    listState = listState,
-                    modifier = Modifier.align(Alignment.BottomCenter)
-                )
             }
+            ScrollHint(
+                listState = listState,
+                modifier = Modifier.align(Alignment.BottomCenter)
+            )
         }
     }
 

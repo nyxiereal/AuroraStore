@@ -14,7 +14,6 @@ import androidx.paging.PagingData
 import androidx.paging.cachedIn
 import androidx.paging.filter
 import com.aurora.extensions.TAG
-import com.aurora.extensions.requiresGMS
 import com.aurora.gplayapi.SearchSuggestEntry
 import com.aurora.gplayapi.data.models.App
 import com.aurora.gplayapi.data.models.StreamCluster
@@ -24,26 +23,33 @@ import com.aurora.gplayapi.helpers.web.WebSearchHelper
 import com.aurora.store.AuroraApp
 import com.aurora.store.data.PageResult
 import com.aurora.store.data.event.AuthEvent
-import com.aurora.store.data.model.SearchFilter
+import com.aurora.store.data.model.normalizeSearchQuery
 import com.aurora.store.data.paging.GenericPagingSource.Companion.manualPager
 import com.aurora.store.data.providers.AuthProvider
+import com.aurora.store.data.providers.SearchPreferences
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.launchIn
-import kotlinx.coroutines.flow.onEach
-import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @HiltViewModel
 class SearchViewModel @Inject constructor(
     val authProvider: AuthProvider,
-    private val webSearchHelper: WebSearchHelper
+    private val webSearchHelper: WebSearchHelper,
+    private val searchPreferences: SearchPreferences
 ) : ViewModel() {
 
     private val contract: SearchContract
@@ -51,27 +57,40 @@ class SearchViewModel @Inject constructor(
 
     private val _suggestions = MutableStateFlow<List<SearchSuggestEntry>>(emptyList())
     val suggestions = _suggestions.asStateFlow()
+    private var suggestionJob: Job? = null
+    private var suggestionRequest = 0
 
-    private val searchFilter = MutableStateFlow(SearchFilter())
-    private val _apps = MutableStateFlow<PagingData<App>>(PagingData.empty())
-    val apps = combine(searchFilter, _apps) { filter, pagingData ->
-        pagingData.filter { app ->
-            when {
-                filter.noAds && app.containsAds -> false
-                filter.isFree && !app.isFree -> false
-                filter.noGMS && app.requiresGMS() -> false
-                app.rating.average < filter.minRating -> false
-                app.installs < filter.minInstalls -> false
-                else -> true
-            }
-        }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), PagingData.empty())
+    val history = searchPreferences.observeHistory(viewModelScope)
+    private val searchFilter = searchPreferences.observeFilters(viewModelScope)
+    private val searchQueries = MutableSharedFlow<String>(
+        replay = 1,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
 
-    fun filterResults(filter: SearchFilter) {
-        searchFilter.value = filter
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val searchResults = searchQueries.flatMapLatest(::resultsFor).cachedIn(viewModelScope)
+
+    val apps = combine(searchFilter, searchResults) { filter, pagingData ->
+        pagingData.filter { app -> filter.matches(app, authProvider.isAnonymous) }
+    }.cachedIn(viewModelScope)
+
+    fun submitSearch(query: String) {
+        val normalized = normalizeSearchQuery(query) ?: return
+        searchPreferences.addHistory(normalized)
+        search(normalized)
     }
 
+    fun removeHistory(query: String) = searchPreferences.removeHistory(query)
+
+    fun clearHistory() = searchPreferences.clearHistory()
+
     fun search(query: String) {
+        val normalized = normalizeSearchQuery(query) ?: return
+        fetchSuggestions("")
+        searchQueries.tryEmit(normalized)
+    }
+
+    private fun resultsFor(query: String): Flow<PagingData<App>> {
         var nextBundleUrl: String? = null
         val nextStreamUrls = mutableSetOf<String>()
 
@@ -82,13 +101,16 @@ class SearchViewModel @Inject constructor(
             streamCluster.clusterAppList
         }.distinctBy { app -> app.packageName }
 
-        manualPager { page ->
+        return manualPager { page ->
             val items = try {
                 when (page) {
-                    1 -> contract.searchResults(query)
-                        .also { nextBundleUrl = it.streamNextPageUrl }
-                        .streamClusters.values
-                        .flatClusters()
+                    1 -> {
+                        nextStreamUrls.clear()
+                        contract.searchResults(query)
+                            .also { nextBundleUrl = it.streamNextPageUrl }
+                            .streamClusters.values
+                            .flatClusters()
+                    }
 
                     else -> {
                         when {
@@ -112,20 +134,38 @@ class SearchViewModel @Inject constructor(
             } catch (exception: GooglePlayException.AuthException) {
                 Log.w(TAG, "Search returned ${exception.code}, redirecting to Splash")
                 AuroraApp.events.send(AuthEvent.SessionExpired())
-                emptyList()
+                throw exception
             }
             PageResult(items)
-        }.flow.distinctUntilChanged()
-            .cachedIn(viewModelScope)
-            .onEach { _apps.value = it }
-            .launchIn(viewModelScope)
+        }.flow
     }
 
     fun fetchSuggestions(query: String) {
-        viewModelScope.launch(Dispatchers.IO) {
-            _suggestions.value = contract.searchSuggestions(query)
-                .filter { it.title.isNotBlank() }
-                .take(5)
+        suggestionJob?.cancel()
+        val request = ++suggestionRequest
+        _suggestions.value = emptyList()
+        val normalized = normalizeSearchQuery(query) ?: return
+        suggestionJob = viewModelScope.launch {
+            delay(300)
+            try {
+                val entries = withContext(Dispatchers.IO) {
+                    contract.searchSuggestions(normalized)
+                        .filter { it.title.isNotBlank() }
+                        .distinctBy { it.title }
+                        .take(5)
+                }
+                ensureActive()
+                if (request == suggestionRequest) _suggestions.value = entries
+            } catch (exception: CancellationException) {
+                throw exception
+            } catch (exception: GooglePlayException.AuthException) {
+                if (request == suggestionRequest) {
+                    Log.w(TAG, "Search suggestions returned ${exception.code}")
+                    AuroraApp.events.send(AuthEvent.SessionExpired())
+                }
+            } catch (exception: Exception) {
+                Log.w(TAG, "Failed to fetch search suggestions", exception)
+            }
         }
     }
 }
