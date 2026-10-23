@@ -281,7 +281,7 @@ private fun ScreenContent(
                 InlineSuggestions()
                 Box(modifier = Modifier.weight(1f)) {
                     when (results.loadState.refresh) {
-                        is LoadState.Loading -> ContainedLoadingIndicator()
+                        is LoadState.Loading -> if (isSearching) ContainedLoadingIndicator()
 
                         is LoadState.Error -> {
                             Placeholder(

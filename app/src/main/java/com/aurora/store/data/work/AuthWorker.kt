@@ -69,7 +69,7 @@ open class AuthWorker @AssistedInject constructor(
                         AuthHelper.Token.AUTH -> {
                             Log.i(TAG, "Refreshing AuthData via AccountManager")
                             val newToken = tokenProvider.fetchAuthToken(email, tokenPair.first)
-                            authProvider.buildGoogleAuthData(email, newToken, AuthHelper.Token.AAS)
+                            authProvider.buildGoogleAuthData(email, newToken, AuthHelper.Token.AUTH)
                                 .getOrThrow()
                         }
                     }
