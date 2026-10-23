@@ -16,6 +16,7 @@ import com.aurora.store.data.installer.base.InstallerBase
 import com.aurora.store.data.model.Installer
 import com.aurora.store.data.model.InstallerInfo
 import com.aurora.store.data.room.download.Download
+import com.aurora.store.util.PackageUtil
 import com.aurora.store.util.PackageUtil.isSharedLibraryInstalled
 import com.topjohnwu.superuser.Shell
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -40,6 +41,12 @@ class RootInstaller @Inject constructor(
                 subtitle = R.string.root_installer_subtitle,
                 description = R.string.root_installer_desc
             )
+
+        /**
+         * Wraps the given command to run as the given UID through su, or as root when it is null
+         */
+        internal fun asUid(uid: Int?, command: String): String =
+            uid?.let { "su $it -c '$command'" } ?: command
     }
 
     override fun install(download: Download) {
@@ -76,9 +83,15 @@ class RootInstaller @Inject constructor(
         }
 
         val userId = Process.myUid() / 100_000
-        val result: Shell.Result =
-            Shell.cmd("pm install-create -i $PLAY_PACKAGE_NAME --user $userId -r -S $totalSize")
-                .exec()
+        val createCommand =
+            "pm install-create -i $PLAY_PACKAGE_NAME --user $userId -r -S $totalSize"
+
+        // Create and commit as the Play Store so it is also recorded as the initiating package,
+        // falling back to root if it is missing or su cannot switch to its UID
+        var playStoreUid = getPlayStoreUid()
+        val result = playStoreUid?.let { Shell.cmd(asUid(it, createCommand)).exec() }
+            ?.takeIf { it.isSuccess }
+            ?: Shell.cmd(createCommand).exec().also { playStoreUid = null }
 
         val response = result.out
 
@@ -96,7 +109,8 @@ class RootInstaller @Inject constructor(
                         .exec()
                 }
 
-                val shellResult = Shell.cmd("pm install-commit $sessionId").exec()
+                val shellResult =
+                    Shell.cmd(asUid(playStoreUid, "pm install-commit $sessionId")).exec()
 
                 if (shellResult.isSuccess) {
                     // Installation is not yet finished if this is a shared library
@@ -127,6 +141,10 @@ class RootInstaller @Inject constructor(
             )
         }
     }
+
+    private fun getPlayStoreUid(): Int? = runCatching {
+        PackageUtil.getPackageInfo(context, PLAY_PACKAGE_NAME).applicationInfo?.uid
+    }.getOrNull()
 
     private fun parseError(result: Shell.Result): String = result.err.joinToString(separator = "\n")
 }
