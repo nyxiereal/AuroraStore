@@ -52,8 +52,13 @@ import com.aurora.store.util.StorageUtil
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
+import javax.inject.Provider
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -75,8 +80,8 @@ import kotlinx.serialization.json.Json
 class AppDetailsViewModel @Inject constructor(
     val authProvider: AuthProvider,
     @ApplicationContext private val context: Context,
-    private val appDetailsHelper: AppDetailsHelper,
-    private val reviewsHelper: ReviewsHelper,
+    private val appDetailsHelperProvider: Provider<AppDetailsHelper>,
+    private val reviewsHelperProvider: Provider<ReviewsHelper>,
     private val webDataSafetyHelper: WebDataSafetyHelper,
     private val downloadHelper: DownloadHelper,
     private val favouriteDao: FavouriteDao,
@@ -86,6 +91,14 @@ class AppDetailsViewModel @Inject constructor(
     private val accountRepository: AccountRepository,
     private val exodusRepository: ExodusRepository
 ) : ViewModel() {
+
+    private val appDetailsHelper: AppDetailsHelper
+        get() = appDetailsHelperProvider.get()
+    private val reviewsHelper: ReviewsHelper
+        get() = reviewsHelperProvider.get()
+
+    private var detailsJob: Job? = null
+    private var requestedPackage: String? = null
 
     private val _app = MutableStateFlow<App?>(null)
     val app = _app.asStateFlow()
@@ -153,63 +166,76 @@ class AppDetailsViewModel @Inject constructor(
     private val accountEmail: String
         get() = authProvider.authData?.email.orEmpty()
 
-    private val isInstalled: Boolean
-        get() = PackageUtil.isInstalled(context, app.value!!.packageName)
-
-    private val isUpdatable: Boolean
-        get() = PackageUtil.isUpdatable(context, app.value!!.packageName, app.value!!.versionCode)
-
-    private val isArchived: Boolean
-        get() = PackageUtil.isArchived(context, app.value!!.packageName)
-
-    private val isExtendedUpdateEnabled: Boolean
-        get() = Preferences.getBoolean(context, PREFERENCE_UPDATES_EXTENDED)
-
-    private val hasValidCerts: Boolean
-        get() = app.value!!.certificateSetList.any {
-            it.certificateSet in CertUtil.getEncodedCertificateHashes(
-                context,
-                app.value!!.packageName
-            )
-        }
-
-    private val hasValidUpdate: Boolean
-        get() = (isUpdatable && hasValidCerts) || (isUpdatable && isExtendedUpdateEnabled)
-
     private val defaultAppState: AppState
-        get() = when {
-            isInstalled -> {
-                if (hasValidUpdate) {
-                    AppState.Updatable
-                } else {
-                    val info = PackageUtil.getPackageInfo(context, app.value!!.packageName)
-                    AppState.Installed(
-                        versionName = info.versionName ?: String(),
-                        versionCode = PackageInfoCompat.getLongVersionCode(info)
-                    )
-                }
+        get() {
+            val loadedApp = app.value ?: return AppState.Loading
+            val packageName = loadedApp.packageName
+            if (PackageUtil.isInstalled(context, packageName)) {
+                val isUpdatable = PackageUtil.isUpdatable(
+                    context,
+                    packageName,
+                    loadedApp.versionCode
+                )
+                val hasValidUpdate = isUpdatable &&
+                    (
+                        Preferences.getBoolean(context, PREFERENCE_UPDATES_EXTENDED) ||
+                            loadedApp.certificateSetList.any {
+                                it.certificateSet in
+                                    CertUtil.getEncodedCertificateHashes(context, packageName)
+                            }
+                        )
+                if (hasValidUpdate) return AppState.Updatable
+                val info = PackageUtil.getPackageInfo(context, packageName)
+                return AppState.Installed(
+                    versionName = info.versionName.orEmpty(),
+                    versionCode = PackageInfoCompat.getLongVersionCode(info)
+                )
             }
-
-            else -> if (isArchived) AppState.Archived else AppState.Unavailable
+            return if (PackageUtil.isArchived(context, packageName)) {
+                AppState.Archived
+            } else {
+                AppState.Unavailable
+            }
         }
 
     init {
         observeAppState()
     }
 
-    fun fetchAppDetails(packageName: String) {
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                _app.value = appDetailsHelper.getAppByPackageName(packageName).copy(
+    fun fetchAppDetails(packageName: String, force: Boolean = false) {
+        if (!force &&
+            requestedPackage == packageName &&
+            (detailsJob?.isActive == true || app.value != null)
+        ) {
+            return
+        }
+        detailsJob?.cancel()
+        requestedPackage = packageName
+        _state.value = AppState.Loading
+        _app.value = null
+        _featuredReviews.value = emptyList()
+        _dataSafetyReport.value = null
+        _exodusReport.value = Report()
+        _exodusReports.value = emptyList()
+        _plexusScores.value = Scores()
+        _suggestionsBundle.value = null
+        suggestionsState = StreamBundle.EMPTY
+        _favourite.value = false
+        detailsJob = viewModelScope.launch(Dispatchers.IO) {
+            val loadedApp = try {
+                val fetched = appDetailsHelper.getAppByPackageName(packageName).copy(
                     isInstalled = PackageUtil.isInstalled(context, packageName)
                 )
+                ensureActive()
+                _app.value = fetched
                 val existingDownload = downloadHelper.getDownload(packageName)
+                ensureActive()
 
                 // A COMPLETED record for an app that is no longer installed means the app was
                 // installed then removed while Aurora held a stale record.
                 // Remove it so the live download observer doesn't lock the UI in Installing state
                 // indefinitely.
-                if (existingDownload?.status == DownloadStatus.COMPLETED && !isInstalled) {
+                if (existingDownload?.status == DownloadStatus.COMPLETED && !fetched.isInstalled) {
                     downloadHelper.removeDownload(packageName)
                     _state.value = defaultAppState
                 } else {
@@ -219,32 +245,32 @@ class AppDetailsViewModel @Inject constructor(
                     _state.value =
                         existingDownload?.let { stateFromDownload(it) } ?: defaultAppState
                 }
+                ensureActive()
+                fetched
             } catch (exception: GooglePlayException.AuthException) {
-                // The saved Play token has been rejected mid-session. Hand off to
-                // Splash to re-validate and rebuild auth, and ask it to bring the
-                // user back to this app's details once auth is good again.
+                ensureActive()
                 Log.w(TAG, "App details fetch returned ${exception.code}, redirecting to Splash")
                 AuroraApp.events.send(AuthEvent.SessionExpired(packageName))
+                return@launch
             } catch (exception: Exception) {
+                if (exception is CancellationException) throw exception
+                ensureActive()
                 Log.e(TAG, "Failed to fetch app details", exception)
                 _app.value = null
                 _state.value = AppState.Error(exception.message)
+                return@launch
             }
-        }.invokeOnCompletion { throwable ->
-            // Only proceed if there was no error while fetching the app details
-            if (throwable != null || app.value == null) return@invokeOnCompletion
 
-            fetchFavourite(packageName)
-            fetchFeaturedReviews(packageName)
-            // Reviews can only be submitted for installed apps with a personal account, so the
-            // user's existing review is only relevant (and fetchable) in that case.
-            if (!authProvider.isAnonymous && app.value!!.isInstalled) {
-                fetchUserAppReview(app.value!!)
+            // Core details are visible before these independent optional requests finish.
+            launch { fetchFavourite(packageName) }
+            launch { fetchFeaturedReviews(packageName) }
+            if (!authProvider.isAnonymous && loadedApp.isInstalled) {
+                launch { fetchUserAppReview(loadedApp) }
             }
-            fetchDataSafetyReport(packageName)
-            fetchSuggestions()
-            fetchExodusPrivacyReport(packageName)
-            if (app.value!!.requiresGMS()) fetchPlexusReport(packageName)
+            launch { fetchDataSafetyReport(packageName) }
+            launch { fetchSuggestions(loadedApp.detailsStreamUrl) }
+            launch { fetchExodusPrivacyReport(packageName) }
+            if (loadedApp.requiresGMS()) launch { fetchPlexusReport(packageName) }
         }
     }
 
@@ -268,26 +294,26 @@ class AppDetailsViewModel @Inject constructor(
      * - If Play returns nothing for a review that was never confirmed, it is still being published,
      *   so the local (pending) copy is kept so the user keeps seeing what they submitted.
      */
-    fun fetchUserAppReview(app: App) {
-        viewModelScope.launch(Dispatchers.IO) {
-            val email = accountEmail
-            if (email.isBlank()) return@launch
-            try {
-                val isTesting = app.testingProgram?.isSubscribed ?: false
-                val apiReview = reviewsHelper.getUserReview(app.packageName, isTesting)
-                if (apiReview != null) {
-                    reviewDao.upsert(
-                        LocalReview.fromReview(apiReview, app.packageName, email, synced = true)
-                    )
-                } else {
-                    val cached = reviewDao.get(app.packageName, email)
-                    if (cached != null && cached.synced) {
-                        reviewDao.delete(app.packageName, email)
-                    }
+    private suspend fun fetchUserAppReview(app: App) {
+        val email = accountEmail
+        if (email.isBlank()) return
+        try {
+            val isTesting = app.testingProgram?.isSubscribed ?: false
+            val apiReview = reviewsHelper.getUserReview(app.packageName, isTesting)
+            currentCoroutineContext().ensureActive()
+            if (apiReview != null) {
+                reviewDao.upsert(
+                    LocalReview.fromReview(apiReview, app.packageName, email, synced = true)
+                )
+            } else {
+                val cached = reviewDao.get(app.packageName, email)
+                if (cached != null && cached.synced) {
+                    reviewDao.delete(app.packageName, email)
                 }
-            } catch (exception: Exception) {
-                Log.e(TAG, "Failed to fetch user review", exception)
             }
+        } catch (exception: Exception) {
+            if (exception is CancellationException) throw exception
+            Log.e(TAG, "Failed to fetch user review", exception)
         }
     }
 
@@ -397,9 +423,11 @@ class AppDetailsViewModel @Inject constructor(
                 }
             }.launchIn(viewModelScope)
 
-        download.filterNotNull().onEach {
-            _state.value = stateFromDownload(it)
-        }.launchIn(viewModelScope)
+        download.filterNotNull()
+            .filter { it.packageName == app.value?.packageName }
+            .onEach {
+                _state.value = stateFromDownload(it)
+            }.launchIn(viewModelScope)
     }
 
     // COMPLETED is bridged to Installing so the UI doesn't briefly fall back to the
@@ -420,60 +448,66 @@ class AppDetailsViewModel @Inject constructor(
         DownloadStatus.VERIFYING -> AppState.Verifying
 
         DownloadStatus.COMPLETED,
-        DownloadStatus.INSTALLING -> if (isInstalled) defaultAppState else AppState.Installing(0F)
+        DownloadStatus.INSTALLING -> if (
+            app.value?.let { PackageUtil.isInstalled(context, it.packageName) } == true
+        ) {
+            defaultAppState
+        } else {
+            AppState.Installing(0F)
+        }
 
         else -> defaultAppState
     }
 
-    private fun fetchFeaturedReviews(packageName: String) {
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                _featuredReviews.value = reviewsHelper.getReviewSummary(packageName)
-            } catch (exception: Exception) {
-                Log.e(TAG, "Failed to fetch featured app reviews", exception)
-                _featuredReviews.value = emptyList()
-            }
+    private suspend fun fetchFeaturedReviews(packageName: String) {
+        try {
+            val reviews = reviewsHelper.getReviewSummary(packageName)
+            currentCoroutineContext().ensureActive()
+            _featuredReviews.value = reviews
+        } catch (exception: Exception) {
+            if (exception is CancellationException) throw exception
+            Log.e(TAG, "Failed to fetch featured app reviews", exception)
         }
     }
 
-    private fun fetchFavourite(packageName: String) {
-        viewModelScope.launch(Dispatchers.IO) {
+    private suspend fun fetchFavourite(packageName: String) {
+        try {
             _favourite.value = favouriteDao.isFavourite(packageName)
+        } catch (exception: Exception) {
+            if (exception is CancellationException) throw exception
+            Log.e(TAG, "Failed to fetch favourite", exception)
         }
     }
 
-    private fun fetchDataSafetyReport(packageName: String) {
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                _dataSafetyReport.value = webDataSafetyHelper.fetch(packageName)
-            } catch (exception: Exception) {
-                Log.e(TAG, "Failed to fetch data safety report", exception)
-                _dataSafetyReport.value = null
-            }
+    private suspend fun fetchDataSafetyReport(packageName: String) {
+        try {
+            val report = webDataSafetyHelper.fetch(packageName)
+            currentCoroutineContext().ensureActive()
+            _dataSafetyReport.value = report
+        } catch (exception: Exception) {
+            if (exception is CancellationException) throw exception
+            Log.e(TAG, "Failed to fetch data safety report", exception)
         }
     }
 
-    private fun fetchSuggestions() {
-        val streamUrl = app.value!!.detailsStreamUrl
-
-        // Bail out if we got no suggestions to offer
+    private suspend fun fetchSuggestions(streamUrl: String?) {
         if (streamUrl.isNullOrBlank()) {
             _suggestionsBundle.value = StreamBundle.EMPTY
             return
         }
-
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val pageBundle = appDetailsHelper.getDetailsStream(streamUrl.hashCode(), streamUrl)
-                val pageClusters = pageBundle.streamClusters.filterValues {
-                    it.clusterTitle.isNotBlank() && it.clusterAppList.isNotEmpty()
-                }
-                suggestionsState = pageBundle.copy(streamClusters = pageClusters)
-                _suggestionsBundle.value = suggestionsState
-            } catch (exception: Exception) {
-                Log.e(TAG, "Failed to fetch suggestions stream", exception)
-                _suggestionsBundle.value = StreamBundle.EMPTY
+        try {
+            val pageBundle = appDetailsHelper.getDetailsStream(streamUrl.hashCode(), streamUrl)
+            currentCoroutineContext().ensureActive()
+            val pageClusters = pageBundle.streamClusters.filterValues {
+                it.clusterTitle.isNotBlank() && it.clusterAppList.isNotEmpty()
             }
+            suggestionsState = pageBundle.copy(streamClusters = pageClusters)
+            _suggestionsBundle.value = suggestionsState
+        } catch (exception: Exception) {
+            if (exception is CancellationException) throw exception
+            Log.e(TAG, "Failed to fetch suggestions stream", exception)
+            currentCoroutineContext().ensureActive()
+            _suggestionsBundle.value = StreamBundle.EMPTY
         }
     }
 
@@ -501,12 +535,16 @@ class AppDetailsViewModel @Inject constructor(
         }
     }
 
-    private fun fetchExodusPrivacyReport(packageName: String) {
-        viewModelScope.launch {
+    private suspend fun fetchExodusPrivacyReport(packageName: String) {
+        try {
             val reports = exodusRepository.fetchReports(packageName)
                 .sortedByDescending { it.versionCode.toLongOrNull() ?: -1L }
+            currentCoroutineContext().ensureActive()
             _exodusReport.value = reports.firstOrNull()
             _exodusReports.value = reports
+        } catch (exception: Exception) {
+            if (exception is CancellationException) throw exception
+            Log.e(TAG, "Failed to fetch privacy report", exception)
         }
     }
 
@@ -533,14 +571,16 @@ class AppDetailsViewModel @Inject constructor(
     suspend fun getNewTrackers(packageName: String, installedVersionCode: Long) =
         exodusRepository.getNewTrackers(packageName, installedVersionCode)
 
-    private fun fetchPlexusReport(packageName: String) {
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                _plexusScores.value = getPlexusReport(packageName)?.report?.scores
-            } catch (exception: Exception) {
-                Log.e(TAG, "Failed to fetch compatibility report", exception)
-                _plexusScores.value = null
-            }
+    private suspend fun fetchPlexusReport(packageName: String) {
+        try {
+            val scores = getPlexusReport(packageName)?.report?.scores
+            currentCoroutineContext().ensureActive()
+            _plexusScores.value = scores
+        } catch (exception: Exception) {
+            if (exception is CancellationException) throw exception
+            Log.e(TAG, "Failed to fetch compatibility report", exception)
+            currentCoroutineContext().ensureActive()
+            _plexusScores.value = null
         }
     }
 

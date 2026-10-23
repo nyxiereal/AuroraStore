@@ -19,6 +19,10 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.IntOffset
 import androidx.lifecycle.Lifecycle
@@ -111,6 +115,14 @@ internal interface NavDisplayEntryPoint {
 fun NavDisplay(startDestination: NavKey) {
     val backstack = rememberNavBackStack(startDestination)
     val context = LocalContext.current
+    var recoveryAttempted by rememberSaveable { mutableStateOf(false) }
+
+    fun finishAuthentication(fallback: Screen) {
+        val splash = backstack.filterIsInstance<Screen.Splash>().lastOrNull()
+        val restored = authenticatedBackStack(splash, fallback)
+        backstack.clear()
+        backstack.addAll(restored)
+    }
 
     fun isMicroGAuthInvalidated(): Boolean =
         Preferences.getBoolean(context, Preferences.PREFERENCE_AUTH_VIA_MICROG, false) &&
@@ -144,20 +156,29 @@ fun NavDisplay(startDestination: NavKey) {
         }
     }
 
-    // Send the user back to Splash whenever a ViewModel reports the saved Play
-    // token was rejected. SplashScreen re-validates via a live Play call and
-    // rebuilds auth on failure, then routes to AppDetails if a packageName was attached.
+    // Recreate the destination's ViewModels after refreshing, so their helpers use fresh auth.
+    // Allow one automatic recovery until the user explicitly navigates or retries.
     LaunchedEffect(Unit) {
         AuroraApp.events.authEvent.collect { event ->
             if (event is AuthEvent.SessionExpired) {
+                val splash = recoverySplash(
+                    backstack.filterIsInstance<Screen>(),
+                    event.packageName,
+                    recoveryAttempted
+                ) ?: return@collect
+                recoveryAttempted = true
                 backstack.clear()
-                backstack.add(Screen.Splash(event.packageName))
+                backstack.add(splash)
             }
         }
     }
 
     fun navigate(destination: Destination) {
+        if (destination !is Destination.Authenticated && destination !is Destination.Main) {
+            recoveryAttempted = false
+        }
         when (destination) {
+            is Destination.Authenticated -> finishAuthentication(destination.fallback)
             is Destination.Splash -> {
                 // Clear the backstack when navigating to Splash to prevent going back to the previous screen when the user is sent back to the splash screen (e.g. after logout).
                 backstack.clear()
@@ -165,9 +186,8 @@ fun NavDisplay(startDestination: NavKey) {
             }
 
             is Destination.Main -> {
-                // Clear the backstack when navigating to Main to prevent going back to the splash screen or other screens.
-                backstack.clear()
-                backstack.add(Screen.Main(destination.initialTab))
+                // Google login can finish above a recovery Splash; keep its pending destination.
+                finishAuthentication(Screen.Main(destination.initialTab))
             }
 
             is Destination.ExpandedStreamBrowse -> backstack.add(
@@ -311,6 +331,8 @@ fun NavDisplay(startDestination: NavKey) {
             entry<Screen.Splash> { screen ->
                 SplashScreen(
                     deepLinkPackageName = screen.packageName,
+                    recoverSession = screen.recoverSession,
+                    recoveryBlocked = screen.recoveryBlocked,
                     onNavigateTo = ::navigate
                 )
             }

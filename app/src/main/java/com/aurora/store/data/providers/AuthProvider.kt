@@ -12,6 +12,7 @@ import com.aurora.Constants
 import com.aurora.extensions.TAG
 import com.aurora.gplayapi.data.models.AuthData
 import com.aurora.gplayapi.data.models.PlayResponse
+import com.aurora.gplayapi.exceptions.GooglePlayException
 import com.aurora.gplayapi.helpers.AuthHelper
 import com.aurora.gplayapi.network.IHttpClient
 import com.aurora.store.AuroraApp
@@ -26,9 +27,12 @@ import com.aurora.store.util.Preferences.PREFERENCE_DISPENSER_URLS
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 
@@ -50,6 +54,8 @@ class AuthProvider @Inject constructor(
         )
     }
 
+    private val cacheLock = Mutex()
+
     @Volatile
     private var cachedDefault: Account? = null
 
@@ -57,11 +63,14 @@ class AuthProvider @Inject constructor(
     private var cacheWarm = false
 
     init {
-        AuroraApp.scope.launch {
-            importLegacyAccountIfNeeded()
-            accountRepository.defaultAccount.collect { account ->
-                cachedDefault = account
-                cacheWarm = true
+        AuroraApp.scope.launch(Dispatchers.IO) {
+            cacheLock.withLock { importLegacyAccountIfNeeded() }
+            accountRepository.defaultAccount.collect {
+                cacheLock.withLock {
+                    // Read under the same lock as writes, rather than applying a queued old row.
+                    cachedDefault = accountRepository.getDefault()
+                    cacheWarm = true
+                }
             }
         }
     }
@@ -89,8 +98,10 @@ class AuthProvider @Inject constructor(
         cachedDefault
     } else {
         runBlocking {
-            importLegacyAccountIfNeeded()
-            accountRepository.getDefault()
+            cacheLock.withLock {
+                importLegacyAccountIfNeeded()
+                accountRepository.getDefault()
+            }
         }
     }
 
@@ -102,8 +113,10 @@ class AuthProvider @Inject constructor(
     /**
      * Checks whether saved AuthData is valid or not
      */
-    fun isSavedAuthDataValid(): Boolean = authData!!.let {
-        matchesActiveSpoof(it) && AuthHelper.using(httpClient).isValid(it)
+    fun isSavedAuthDataValid(): Boolean = try {
+        authData!!.let { matchesActiveSpoof(it) && AuthHelper.using(httpClient).isValid(it) }
+    } catch (_: GooglePlayException.AuthException) {
+        false
     }
 
     /**
@@ -147,6 +160,7 @@ class AuthProvider @Inject constructor(
                     )
                 )
             } catch (exception: Exception) {
+                if (exception is CancellationException) throw exception
                 Log.e(TAG, "Failed to generate Session", exception)
                 return@withContext Result.failure(exception)
             }
@@ -179,6 +193,7 @@ class AuthProvider @Inject constructor(
                     )
                 )
             } catch (exception: Exception) {
+                if (exception is CancellationException) throw exception
                 Log.e(TAG, "Failed to generate AuthData", exception)
                 return@withContext Result.failure(exception)
             }
@@ -224,6 +239,7 @@ class AuthProvider @Inject constructor(
                     }
                 }
             }
+            require(authData.authToken.isNotEmpty() && authData.deviceConfigToken.isNotEmpty())
             accountRepository.upsertAccount(
                 account.copy(
                     email = authData.email,
@@ -232,8 +248,9 @@ class AuthProvider @Inject constructor(
                     profilePicUrl = authData.userProfile?.artwork?.url ?: account.profilePicUrl
                 )
             )
+            if (account.isDefault) syncDefaultToPrefs()
             authData
-        }
+        }.onFailure { if (it is CancellationException) throw it }
     }
 
     /** Refreshes the target account, then marks it default. Leaves the old default if it fails. */
@@ -248,20 +265,24 @@ class AuthProvider @Inject constructor(
      * must be called after every change of *which* account is the default (login, set-default,
      * account removal) to keep them in sync with the DB. Clears the prefs when no default remains.
      */
-    suspend fun syncDefaultToPrefs() {
-        val account = accountRepository.getDefault()
-        if (account == null) {
-            AccountProvider.logout(context)
-            return
+    suspend fun syncDefaultToPrefs() = withContext(Dispatchers.IO) {
+        cacheLock.withLock {
+            val account = accountRepository.getDefault()
+            cachedDefault = account
+            cacheWarm = true
+            if (account == null) {
+                AccountProvider.logout(context)
+                return@withLock
+            }
+            val token = account.aasToken ?: account.authToken.orEmpty()
+            AccountProvider.login(context, account.email, token, account.tokenType, account.type)
+            account.authDataJson?.let { Preferences.putString(context, PREFERENCE_AUTH_DATA, it) }
+            Preferences.putBoolean(
+                context,
+                Preferences.PREFERENCE_AUTH_VIA_MICROG,
+                account.authViaMicroG
+            )
         }
-        val token = account.aasToken ?: account.authToken.orEmpty()
-        AccountProvider.login(context, account.email, token, account.tokenType, account.type)
-        account.authDataJson?.let { Preferences.putString(context, PREFERENCE_AUTH_DATA, it) }
-        Preferences.putBoolean(
-            context,
-            Preferences.PREFERENCE_AUTH_VIA_MICROG,
-            account.authViaMicroG
-        )
     }
 
     /**

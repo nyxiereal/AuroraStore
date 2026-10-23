@@ -112,8 +112,7 @@ open class AuthWorker @AssistedInject constructor(
             )
             authData
         } else {
-            authProvider.removeAuthData(context)
-            authProvider.logout()
+            // Keep the saved account and its bindings when a refresh returns unusable auth.
             null
         }
 }

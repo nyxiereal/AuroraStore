@@ -28,7 +28,9 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import java.net.ConnectException
 import java.net.UnknownHostException
 import javax.inject.Inject
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -49,19 +51,34 @@ class AuthViewModel @Inject constructor(
     private val _accountAdded = MutableSharedFlow<Boolean>()
     val accountAdded = _accountAdded.asSharedFlow()
 
-    init {
-        updateAuthState()
+    private var authJob: Job? = null
+    private var forceRefresh = false
+
+    fun startSession(recoverSession: Boolean = false, recoveryBlocked: Boolean = false) {
+        if (_authState.value != AuthState.Init) return
+        forceRefresh = recoverSession
+        if (recoveryBlocked) {
+            _authState.value = AuthState.Failed(context.getString(R.string.session_recovery_failed))
+        } else {
+            updateAuthState()
+        }
+    }
+
+    fun onTokenError() {
+        _authState.value = AuthState.Failed(context.getString(R.string.failed_to_generate_session))
     }
 
     fun buildGoogleAuthData(email: String, token: String, tokenType: AuthHelper.Token) {
+        authJob?.cancel()
         _authState.value = AuthState.Fetching
-        viewModelScope.launch(Dispatchers.IO) {
+        authJob = viewModelScope.launch(Dispatchers.IO) {
             try {
                 verifyAndSaveAuth(
                     authProvider.buildGoogleAuthData(email, token, tokenType).getOrThrow(),
                     AccountType.GOOGLE
                 )
             } catch (exception: Exception) {
+                if (exception is CancellationException) throw exception
                 _authState.value =
                     AuthState.Failed(context.getString(R.string.failed_to_generate_session))
                 Log.e(TAG, "Failed to generate Session", exception)
@@ -88,21 +105,23 @@ class AuthViewModel @Inject constructor(
                     authViaMicroG = false,
                     makeDefault = false
                 )
-            }.isSuccess
+            }.onFailure { if (it is CancellationException) throw it }.isSuccess
             authProvider.syncDefaultToPrefs()
             _accountAdded.emit(added)
         }
     }
 
     fun buildAnonymousAuthData() {
+        authJob?.cancel()
         _authState.value = AuthState.Fetching
-        viewModelScope.launch(Dispatchers.IO) {
+        authJob = viewModelScope.launch(Dispatchers.IO) {
             try {
                 verifyAndSaveAuth(
                     authProvider.buildAnonymousAuthData().getOrThrow(),
                     AccountType.ANONYMOUS
                 )
             } catch (exception: Exception) {
+                if (exception is CancellationException) throw exception
                 Log.e(TAG, "Failed to generate Session", exception)
                 val message = when (exception) {
                     is UnknownHostException -> context.getString(R.string.check_connectivity)
@@ -136,6 +155,7 @@ class AuthViewModel @Inject constructor(
                     AuroraApp.events.send(AuthEvent.GoogleLogin(false, "", ""))
                 }
             } catch (exception: Exception) {
+                if (exception is CancellationException) throw exception
                 Log.e(TAG, "Failed to build AuthData", exception)
                 AuroraApp.events.send(AuthEvent.GoogleLogin(false, "", ""))
             }
@@ -145,24 +165,26 @@ class AuthViewModel @Inject constructor(
     fun retry() = updateAuthState()
 
     private fun updateAuthState() {
-        if (_authState.value != AuthState.Fetching) {
-            if (AccountProvider.isLoggedIn(context)) {
-                _authState.value = AuthState.Available
-                buildSavedAuthData()
-            } else {
-                _authState.value = AuthState.Unavailable
-            }
+        if (authJob?.isActive == true) return
+        if (AccountProvider.isLoggedIn(context)) {
+            _authState.value = AuthState.Available
+            authJob = buildSavedAuthData()
+        } else {
+            _authState.value = AuthState.Unavailable
         }
     }
 
     private fun buildSavedAuthData() = viewModelScope.launch(Dispatchers.IO) {
         try {
-            if (authProvider.isSavedAuthDataValid()) {
+            if (!forceRefresh && authProvider.isSavedAuthDataValid()) {
                 _authState.value = AuthState.Valid
             } else {
-                // Generate and validate new auth
+                _authState.value = AuthState.Fetching
                 when (AccountProvider.getAccountType(context)) {
-                    AccountType.ANONYMOUS -> buildAnonymousAuthData()
+                    AccountType.ANONYMOUS -> verifyAndSaveAuth(
+                        authProvider.buildAnonymousAuthData().getOrThrow(),
+                        AccountType.ANONYMOUS
+                    )
 
                     AccountType.GOOGLE -> {
                         val email = AccountProvider.getLoginEmail(context)
@@ -174,7 +196,14 @@ class AuthViewModel @Inject constructor(
 
                         when (tokenPair.second) {
                             AuthHelper.Token.AAS -> {
-                                buildGoogleAuthData(email, tokenPair.first, AuthHelper.Token.AAS)
+                                verifyAndSaveAuth(
+                                    authProvider.buildGoogleAuthData(
+                                        email,
+                                        tokenPair.first,
+                                        AuthHelper.Token.AAS
+                                    ).getOrThrow(),
+                                    AccountType.GOOGLE
+                                )
                             }
 
                             AuthHelper.Token.AUTH -> {
@@ -186,6 +215,7 @@ class AuthViewModel @Inject constructor(
                 }
             }
         } catch (exception: Exception) {
+            if (exception is CancellationException) throw exception
             val error = when (exception) {
                 is UnknownHostException -> context.getString(R.string.title_no_network)
                 is ConnectException -> context.getString(R.string.server_unreachable)
@@ -231,8 +261,7 @@ class AuthViewModel @Inject constructor(
             )
             _authState.value = AuthState.SignedIn
         } else {
-            authProvider.removeAuthData(context)
-            authProvider.logout()
+            // A failed refresh must not delete saved accounts or their app bindings.
             _authState.value =
                 AuthState.Failed(context.getString(R.string.failed_to_generate_session))
         }

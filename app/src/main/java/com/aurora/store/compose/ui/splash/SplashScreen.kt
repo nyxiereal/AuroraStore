@@ -61,6 +61,7 @@ import com.aurora.store.BuildConfig
 import com.aurora.store.R
 import com.aurora.store.compose.composition.LocalNetworkStatus
 import com.aurora.store.compose.navigation.Destination
+import com.aurora.store.compose.navigation.Screen
 import com.aurora.store.data.model.AuthState
 import com.aurora.store.data.model.NetworkStatus
 import com.aurora.store.data.work.ExodusTrackerWorker
@@ -77,6 +78,8 @@ fun SplashScreen(
     viewModel: AuthViewModel = hiltViewModel(),
     deepLinkPackageName: String? = null,
     deepLinkDevId: String? = null,
+    recoverSession: Boolean = false,
+    recoveryBlocked: Boolean = false,
     onNavigateTo: (Destination) -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -90,6 +93,16 @@ fun SplashScreen(
 
     var anonymousLoading by remember { mutableStateOf(false) }
     var googleLoading by remember { mutableStateOf(false) }
+    var wasOffline by remember { mutableStateOf(!isOnline) }
+
+    LaunchedEffect(viewModel) {
+        viewModel.startSession(recoverSession, recoveryBlocked)
+    }
+
+    fun onTokenError() {
+        googleLoading = false
+        viewModel.onTokenError()
+    }
 
     val accountLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
@@ -102,7 +115,7 @@ fun SplashScreen(
                 accountName = accountName,
                 oldToken = null,
                 activity = activity,
-                onError = { googleLoading = false }
+                onError = ::onTokenError
             )
         } else {
             googleLoading = false
@@ -115,22 +128,14 @@ fun SplashScreen(
                 anonymousLoading = false
                 googleLoading = false
                 ExodusTrackerWorker.enqueue(context)
-                when {
-                    !deepLinkDevId.isNullOrBlank() -> onNavigateTo(
-                        Destination.DevProfile(deepLinkDevId)
-                    )
-                    !deepLinkPackageName.isNullOrBlank() -> onNavigateTo(
-                        Destination.AppDetails(deepLinkPackageName)
-                    )
-                    else -> onNavigateTo(
-                        Destination.Main(
-                            Preferences.getInteger(
-                                context,
-                                Preferences.PREFERENCE_DEFAULT_SELECTED_TAB
-                            )
-                        )
+                val destination = when {
+                    !deepLinkDevId.isNullOrBlank() -> Screen.DevProfile(deepLinkDevId)
+                    !deepLinkPackageName.isNullOrBlank() -> Screen.AppDetails(deepLinkPackageName)
+                    else -> Screen.Main(
+                        Preferences.getInteger(context, Preferences.PREFERENCE_DEFAULT_SELECTED_TAB)
                     )
                 }
+                onNavigateTo(Destination.Authenticated(destination))
             }
             is AuthState.PendingAccountManager -> requestAuthTokenForGoogle(
                 viewModel = viewModel,
@@ -138,7 +143,7 @@ fun SplashScreen(
                 accountName = state.email,
                 oldToken = state.token,
                 activity = activity,
-                onError = { googleLoading = false }
+                onError = ::onTokenError
             )
             is AuthState.Failed -> {
                 anonymousLoading = false
@@ -149,9 +154,10 @@ fun SplashScreen(
     }
 
     LaunchedEffect(isOnline) {
-        if (isOnline && authState is AuthState.Failed) {
+        if (isOnline && wasOffline && !recoveryBlocked && authState is AuthState.Failed) {
             viewModel.retry()
         }
+        wasOffline = !isOnline
     }
 
     val isLoading = authState == AuthState.Init ||
@@ -263,6 +269,14 @@ fun SplashScreen(
                             dimensionResource(R.dimen.spacing_small)
                         )
                     ) {
+                        if (authState is AuthState.Failed) {
+                            OutlinedButton(
+                                enabled = isOnline,
+                                onClick = { viewModel.retry() }
+                            ) {
+                                Text(stringResource(R.string.action_retry))
+                            }
+                        }
                         Button(
                             modifier = Modifier.width(dimensionResource(R.dimen.width_button)),
                             enabled = !anonymousLoading && !googleLoading && isOnline,
@@ -347,11 +361,15 @@ private fun requestAuthTokenForGoogle(
             },
             activity,
             { result ->
-                val token = result.result.getString(AccountManager.KEY_AUTHTOKEN)
-                if (token != null) {
-                    viewModel.buildGoogleAuthData(accountName, token, AuthHelper.Token.AUTH)
-                } else {
-                    Log.e("SplashScreen", "AccountManager returned null auth token")
+                try {
+                    val token = result.result.getString(AccountManager.KEY_AUTHTOKEN)
+                    if (!token.isNullOrBlank()) {
+                        viewModel.buildGoogleAuthData(accountName, token, AuthHelper.Token.AUTH)
+                    } else {
+                        onError()
+                    }
+                } catch (_: Exception) {
+                    Log.e("SplashScreen", "Failed to get authToken for Google login")
                     onError()
                 }
             },

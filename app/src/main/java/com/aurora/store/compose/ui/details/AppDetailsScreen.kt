@@ -143,7 +143,7 @@ fun AppDetailsScreen(
     val accounts by viewModel.accounts.collectAsStateWithLifecycle()
     var storageWarning by remember { mutableStateOf<StorageRequirement?>(null) }
 
-    LaunchedEffect(key1 = packageName) { viewModel.fetchAppDetails(packageName) }
+    LaunchedEffect(viewModel, packageName) { viewModel.fetchAppDetails(packageName) }
 
     LaunchedEffect(Unit) {
         viewModel.storageWarning.collect { storageWarning = it }
@@ -176,18 +176,18 @@ fun AppDetailsScreen(
         transitionSpec = { fadeIn() togetherWith fadeOut() },
         label = "AppDetailsState"
     ) { currentState ->
+        val loadedApp = app
         when {
             currentState is AppState.Error ->
                 ScreenContentError(
                     message = currentState.message,
-                    onRetry = { viewModel.fetchAppDetails(packageName) }
+                    onRetry = { viewModel.fetchAppDetails(packageName, force = true) }
                 )
 
-            currentState is AppState.Loading || app == null ->
+            currentState is AppState.Loading || loadedApp == null ->
                 ScreenContentLoading()
 
             else -> {
-                val loadedApp = app!!
                 ScreenContentApp(
                     app = loadedApp,
                     featuredReviews = featuredReviews,
@@ -237,7 +237,7 @@ fun AppDetailsScreen(
                     },
                     onForceRestart = {
                         val intent = Intent(context, ComposeActivity::class.java)
-                            .putExtra("packageName", packageName)
+                            .putExtra(Screen.PARCEL_KEY, Screen.AppDetails(packageName))
                         ProcessPhoenix.triggerRebirth(context, intent)
                     }
                 )

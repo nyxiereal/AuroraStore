@@ -27,13 +27,12 @@ import dagger.hilt.components.SingletonComponent
 import javax.inject.Singleton
 
 /**
- * Module to instantiate singleton components for different helpers from gplayapi library
+ * Authenticated helpers capture credentials, so each consumer must get the current session.
  */
 @Module
 @InstallIn(SingletonComponent::class)
 object HelperModule {
 
-    @Singleton
     @Provides
     fun providesAppDetailsHelperInstance(
         authProvider: AuthProvider,
@@ -41,7 +40,6 @@ object HelperModule {
     ): AppDetailsHelper = AppDetailsHelper(authProvider.authData!!)
         .using(httpClient)
 
-    @Singleton
     @Provides
     fun providesStreamHelperInstance(
         authProvider: AuthProvider,
@@ -49,7 +47,6 @@ object HelperModule {
     ): StreamHelper = StreamHelper(authProvider.authData!!)
         .using(httpClient)
 
-    @Singleton
     @Provides
     fun providesExpandedBrowseHelperInstance(
         authProvider: AuthProvider,
@@ -57,7 +54,6 @@ object HelperModule {
     ): ExpandedBrowseHelper = ExpandedBrowseHelper(authProvider.authData!!)
         .using(httpClient)
 
-    @Singleton
     @Provides
     fun providesCategoryHelperInstance(
         authProvider: AuthProvider,
@@ -65,7 +61,6 @@ object HelperModule {
     ): CategoryHelper = CategoryHelper(authProvider.authData!!)
         .using(httpClient)
 
-    @Singleton
     @Provides
     fun providesReviewsHelperInstance(
         authProvider: AuthProvider,
@@ -73,7 +68,6 @@ object HelperModule {
     ): ReviewsHelper = ReviewsHelper(authProvider.authData!!)
         .using(httpClient)
 
-    @Singleton
     @Provides
     fun providesSearchHelperInstance(
         authProvider: AuthProvider,
